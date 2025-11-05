@@ -2,10 +2,12 @@ import pandas as pd
 import dash
 from dash import dcc, html, Input, Output, State, callback
 import plotly.express as px
+import dash_bootstrap_components as dbc
+
 
 # Lecture du cache: données de prix SPOT réalisé France
 # Téléchargeable à: https://ember-energy.org/data/european-wholesale-electricity-price-data/
-df = pd.read_csv("data/France.csv")
+df = pd.read_csv("data/France - extrait.csv")
 df["Datetime (UTC)"] = pd.to_datetime(df["Datetime (UTC)"])
 df.sort_values(by="Datetime (UTC)", inplace=True)
 min_date: pd.Timestamp = df["Datetime (UTC)"].min()
@@ -22,10 +24,18 @@ spot_layout = html.Div(
         html.H2("Prix SPOT (France)"),
         html.Div(
             [
-                html.Button(
-                    "Dèrniere semaine", id="derniere-semaine-button", n_clicks=0
+                dbc.Button(
+                    "Dèrniere semaine", 
+                    id="derniere-semaine-button", 
+                    n_clicks=0,
+                    color = 'primary',
+                    className = "me-2"
                 ),
-                html.Button("Dernier mois", id="dernier-mois-button", n_clicks=0),
+                dbc.Button("Dernier mois", 
+                           id="dernier-mois-button", 
+                           n_clicks=0,
+                           color = "secondary"
+                ),
             ]
         ),
         dcc.DatePickerRange(

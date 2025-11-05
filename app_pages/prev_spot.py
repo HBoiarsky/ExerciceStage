@@ -1,9 +1,14 @@
 from dash import dcc, html, Input, Output, callback, State
+import dash_bootstrap_components as dbc
 import os
 import pandas as pd
 import pickle
 import base64
 import io
+
+import plotly.graph_objects as go
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+import numpy as np
 
 model_files = [f for f in os.listdir("models") if f.endswith(".pkl")]
 prev_spot_layout = html.Div(
@@ -51,7 +56,13 @@ prev_spot_layout = html.Div(
             options=[{"label": f, "value": f} for f in model_files],
             placeholder="Sélectionner un modèle",
         ),
-        html.Button("Lancer les prévisions", id="run-forecasts-button", n_clicks=0),
+        dbc.Button(
+            "Lancer les prévisions", 
+            id="run-forecasts-button", 
+            n_clicks=0,
+            color="success",
+            className="mt-3"
+        ),
         html.Div(id="forecast-output"),
     ],
 )
@@ -102,17 +113,157 @@ def run_forecasts(n_clicks, model_filename, contents):
         with open(f"models/{model_filename}", "rb") as file:
             model = pickle.load(file)
         try:
-            # TODO: exploiter `previsions_prix_spot`
-            previsions_prix_spot = model.predict(
-                df[model.feature_names_in_].replace("ND", float("nan")).dropna()
-            )
-        except Exception as e:
-            return html.Div([f"Erreur lors de l'exécution du modèle: {e}"])
+            # PRÉPARATION DES DONNÉES 
+            # Sélection des colonnes nécessaires au modèle et nettoyage
+            # - Garde uniquement les features utilisées lors de l'entraînement
+            # - Remplace les valeurs "ND" par NaN
+            # - Supprime les lignes avec des valeurs manquantes
+            df_clean = df[model.feature_names_in_].replace('ND', float('nan')).dropna()
 
-        # Enregistre en .csv les données de prévision
-        pd.DataFrame(previsions_prix_spot).to_csv("data/previsions.csv")
-        return html.Div(
-            ["Prévisions lancées avec succès! (Affichage des résultats à implémenter)"]
-        )
+            # Le modèle prédit le prix pour chaque heure sur base des données éco2mix
+            previsions_prix_spot = model.predict(df_clean)
+
+            # CHARGEMENT DES PRIX SPOT RÉELS 
+            # Lecture des prix historiques
+            df_spot = pd.read_csv("data/France - extrait.csv")
+            # Conversion de la colonne datetime en format pandas pour le matching
+            df_spot["Datetime (UTC)"] = pd.to_datetime(df_spot["Datetime (UTC)"])
+
+            # PRÉPARATION DES DATES POUR LE MATCHING 
+            df["datetime"] = pd.to_datetime(df["Date"] + " " + df["Heures"])
+
+            # CONSTRUCTION DU DATAFRAME RÉSULTATS 
+            # Création d'un DataFrame contenant les prévisions et les données originales
+            # On utilise les index de df_clean pour garder uniquement les lignes valides
+            df_results = df.loc[df_clean.index].copy()
+            # Ajout de la colonne des prévisions
+            df_results["prevision"] = previsions_prix_spot
+
+            # FUSION AVEC LES PRIX RÉELS 
+            # Jointure left pour matcher les prévisions avec les prix réels historiques
+            # left join : on garde toutes les prévisions même sans prix réel correspondant
+            df_results = df_results.merge(
+                df_spot[["Datetime (UTC)", "Price (EUR/MWhe)"]],
+                left_on = "datetime",
+                right_on = "Datetime (UTC)",
+                how = "left"
+            )
+
+            # CALCUL DES MÉTRIQUES DE PERFORMANCE 
+            # Création d'un masque pour identifier les lignes avec un prix réel disponible
+            valid_mask = df_results["Price (EUR/MWhe)"].notna()
+            if valid_mask.sum() > 0 :
+
+                # Calcul de la MAE
+                mae = mean_absolute_error(
+                    df_results.loc[valid_mask, "Price (EUR/MWhe)"],
+                    df_results.loc[valid_mask, "prevision"]
+                )
+
+                # Calcul de la RMSE 
+                rmse = np.sqrt(mean_squared_error(
+                    df_results.loc[valid_mask, "Price (EUR/MWhe)"],
+                    df_results.loc[valid_mask, "prevision"]
+                ))
+
+
+                # CRÉATION DU GRAPHIQUE COMPARATIF
+                fig = go.Figure()
+
+                # Ajout de la courbe des prix réels (en bleu)
+                fig.add_trace(go.Scatter(
+                    x=df_results["datetime"],
+                    y=df_results["Price (EUR/MWhe)"],
+                    mode='lines',
+                    name='Prix réels',
+                    line=dict(color='blue', width=2)
+                ))
+                
+                # Ajout de la courbe des prix prévisions (en rouge)
+                fig.add_trace(go.Scatter(
+                    x=df_results["datetime"],
+                    y=df_results["prevision"],
+                    mode='lines',
+                    name='Prévisions',
+                    line=dict(color='red', width=2, dash='dash')
+                ))
+                
+
+                # Configuration du layout du graphique
+                fig.update_layout(
+                    title="Comparaison Prévisions vs Prix Réels",
+                    xaxis_title="Date et Heure",
+                    yaxis_title="Prix (EUR/MWhe)",
+                    hovermode='x unified',
+                    template="plotly_white"
+                )
+
+                # SAUVEGARDE DES PRÉVISIONS 
+                # Export des prévisions en CSV 
+                pd.DataFrame(previsions_prix_spot).to_csv("data/previsions.csv")
+
+                # AFFICHAGE DES RÉSULTATS 
+                return html.Div([
+                    dbc.Alert([
+                        html.H4("✓ Prévisions réalisées avec succès!", className="alert-heading"),
+                        html.Hr(),
+                        html.P([
+                            html.Strong(f"Nombre de prévisions : "), f"{len(previsions_prix_spot)} heures",
+                            html.Br(),
+                            html.Strong(f"MAE (Erreur Absolue Moyenne) : "), f"{mae:.2f} EUR/MWhe",
+                            html.Br(),
+                            html.Strong(f"RMSE (Erreur Quadratique Moyenne) : "), f"{rmse:.2f} EUR/MWhe"
+                        ])
+                    ], color="success", className="mt-3"),
+                    dcc.Graph(figure=fig, className="mt-3")
+                ])
+            
+            # CAS 2 : Pas de données réelles  : affichage des prévisions uniquement
+            else :
+                # CRÉATION DU GRAPHIQUE (prévisions seules) 
+                fig = go.Figure()
+
+                # Ajout uniquement de la courbe des prévisions (en rouge)
+                fig.add_trace(go.Scatter(
+                    x=df_results["datetime"],
+                    y=df_results["prevision"],
+                    mode='lines',
+                    name='Prévisions',
+                    line=dict(color='red', width=2)
+                ))
+                
+                # Configuration du layout du graphique
+                fig.update_layout(
+                    title="Prévisions de prix SPOT",
+                    xaxis_title="Date et heure",
+                    yaxis_title="Prix (EUR/MWhe)",
+                    template="plotly_white"
+                )
+                
+                # SAUVEGARDE DES PRÉVISIONS 
+                pd.DataFrame(previsions_prix_spot).to_csv("data/previsions.csv")
+                
+                #  AFFICHAGE DES RÉSULTATS  
+                return html.Div([
+                    dbc.Alert([
+                        html.H4("Prévisions réalisées avec succès", className="alert-heading"),
+                        html.P(f"Nombre de prévisions : {len(previsions_prix_spot)} heures"),
+                        html.P("Aucune donnée réelle correspondante trouvée pour comparaison", className="text-warning")
+                    ], color="info", className="mt-3"),
+                    dcc.Graph(figure=fig, className="mt-3")
+                ])
+
+        except Exception as e:
+            # GESTION DES ERREURS D'EXÉCUTION 
+            return dbc.Alert([
+                html.H4("Erreur", className="alert-heading"),
+                html.P(f"Erreur lors de l'exécution du modèle: {e}")
+            ], color="danger", className="mt-3")
+            
+
     except Exception as e:
-        return html.Div([f"Erreur lors du chargement ou de l'exécution du modèle: {e}"])
+        #  GESTION DES ERREURS DE CHARGEMENT 
+        return dbc.Alert([
+            html.H4("Erreur", className="alert-heading"),
+            html.P(f"Erreur lors du chargement ou de l'exécution du modèle: {e}")
+        ], color="danger", className="mt-3")

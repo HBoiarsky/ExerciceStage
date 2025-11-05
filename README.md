@@ -47,3 +47,15 @@ Ajoutez une ou plusieurs fonctionnalités à cette application ! Quelques idées
 - onglet "Prévision de prix SPOT": ajouter un formulaire pour construire un input à partir des données renvoyées par [l'API d'éco2mix](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-tr/api/?disjunctive.nature).
 - onglet "Prévision de prix SPOT": exploiter les prévisions faites par le modèle, par exemple en les affichant, les comparant au réalisé de prix SPOT dans `data/France.csv`, etc.
 - tous les onglets: modifier les boutons pour utiliser `dbc.Button` à la place (ou autre améliorations de style)
+
+
+# Fonctionnalités ajoutées
+
+## 1. Amélioration des boutons (Bootstrap)
+- Remplacement des boutons HTML par dbc.Button
+- Ajout de couleurs thématiques
+
+## 2. Visualisation des prévisions
+- Graphique interactif comparant prévisions vs réalité
+- Calcul des métriques MAE et RMSE
+- Gestion du cas sans données réelles
